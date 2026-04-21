@@ -1,9 +1,6 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-
 import cv2
 import numpy as np
+from dataclasses import dataclass
 
 from app.preprocess import PreprocessedFace
 
@@ -12,89 +9,119 @@ from app.preprocess import PreprocessedFace
 class AcneFeatureResult:
     features: dict
     red_mask: np.ndarray
-    texture_map: np.ndarray
+    redness_map: np.ndarray
+    dog_map: np.ndarray
+    lap_map: np.ndarray
+    candidate_mask: np.ndarray
 
+def _normalize_to_uint8(arr: np.ndarray) -> np.ndarray:
+    arr = arr.astype(np.float32)
+    arr = arr - arr.min()
+    if arr.max() > 0:
+        arr = arr / arr.max()
+    return (arr * 255).astype(np.uint8)
 
-
-def _clean_mask(mask: np.ndarray) -> np.ndarray:
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
-    return cleaned
-
-
-
-def detect_red_regions(face: PreprocessedFace) -> tuple[np.ndarray, dict]:
-    hsv = face.hsv
-    lab = face.lab
-    analysis_mask = face.analysis_mask
-
-    lower_red1 = np.array([0, 30, 40], dtype=np.uint8)
-    upper_red1 = np.array([12, 255, 255], dtype=np.uint8)
-    lower_red2 = np.array([170, 30, 40], dtype=np.uint8)
-    upper_red2 = np.array([180, 255, 255], dtype=np.uint8)
-
-    hsv_red = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
-
-    a_channel = lab[:, :, 1]
-    redness_boost = cv2.threshold(a_channel, 145, 255, cv2.THRESH_BINARY)[1]
-    combined = cv2.bitwise_and(hsv_red, redness_boost)
-    combined = cv2.bitwise_and(combined, analysis_mask)
-    cleaned = _clean_mask(combined)
-
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned, connectivity=8)
-    areas = []
-    for i in range(1, num_labels):
-        area = int(stats[i, cv2.CC_STAT_AREA])
-        if 8 <= area <= 5000:
-            areas.append(area)
-        else:
-            cleaned[labels == i] = 0
-
-    analysis_pixels = max(int(np.count_nonzero(analysis_mask)), 1)
-    red_pixels = int(np.count_nonzero(cleaned))
-    red_area_percent = 100.0 * red_pixels / analysis_pixels
-
-    mean_redness = float(np.mean(a_channel[cleaned > 0])) if red_pixels else 0.0
-    feature_stats = {
-        'spot_count': len(areas),
-        'avg_spot_size': float(np.mean(areas)) if areas else 0.0,
-        'red_area_percent': float(red_area_percent),
-        'mean_redness': mean_redness,
-    }
-    return cleaned, feature_stats
-
-
-
-def texture_irregularity(face: PreprocessedFace) -> tuple[np.ndarray, dict]:
-    gray = face.gray
-    analysis_mask = face.analysis_mask
-
-    lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
-    lap_abs = cv2.convertScaleAbs(lap)
-    lap_masked = cv2.bitwise_and(lap_abs, lap_abs, mask=analysis_mask)
-
-    kernel = np.ones((7, 7), np.float32) / 49.0
-    mean = cv2.filter2D(gray.astype(np.float32), -1, kernel)
-    sq_mean = cv2.filter2D((gray.astype(np.float32) ** 2), -1, kernel)
-    variance = np.maximum(sq_mean - mean**2, 0)
-    variance = variance * (analysis_mask > 0)
-
-    analysis_pixels = max(int(np.count_nonzero(analysis_mask)), 1)
-    edge_density = float(np.count_nonzero(lap_masked > 20) / analysis_pixels)
-    texture_score = float(np.mean(variance[analysis_mask > 0]) / 100.0)
-
-    normalized_var = cv2.normalize(variance, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    return normalized_var, {
-        'texture_score': texture_score,
-        'edge_density': edge_density,
-    }
-
+def _inside_ellipse(cx, cy, ex, ey, ax, ay):
+    if ax <= 0 or ay <= 0:
+        return False
+    return ((cx - ex) ** 2) / (ax ** 2) + ((cy - ey) ** 2) / (ay ** 2) <= 1.0
 
 
 def extract_features(face: PreprocessedFace) -> AcneFeatureResult:
-    red_mask, red_stats = detect_red_regions(face)
-    texture_map, texture_stats = texture_irregularity(face)
+    hsv = face.hsv
+    lab = face.lab
+    gray = face.gray
+    skin_mask = face.skin_mask
+    focus_mask = face.focus_mask
 
-    features = {**red_stats, **texture_stats}
-    return AcneFeatureResult(features=features, red_mask=red_mask, texture_map=texture_map)
+    a = lab[:, :, 1].astype(np.float32)
+    s = hsv[:, :, 1]
+    v = hsv[:, :, 2]
+
+    blur_a = cv2.GaussianBlur(a, (0, 0), 5)
+    redness = a - blur_a
+
+    lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+
+    g1 = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 1)
+    g2 = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 3)
+    dog = np.abs(g1 - g2)
+
+    candidate = (
+        (redness > 2.4)
+        & (dog > 3.2)
+        & (lap > 5.5)
+        & (skin_mask > 0)
+        & (focus_mask > 0)
+        & (s > 18)
+        & (v > 45)
+    ).astype(np.uint8) * 255
+
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(candidate)
+    mask = np.zeros_like(candidate)
+
+    kept_areas = []
+    kept_redness = []
+
+    h_img, w_img = gray.shape
+
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        w = int(stats[i, cv2.CC_STAT_WIDTH])
+        h = int(stats[i, cv2.CC_STAT_HEIGHT])
+        x = int(stats[i, cv2.CC_STAT_LEFT])
+        y = int(stats[i, cv2.CC_STAT_TOP])
+
+        if h == 0:
+            continue
+
+        ar = w / h
+        cx = x + w / 2.0
+        cy = y + h / 2.0
+
+        if not (4 < area < 85 and 0.4 < ar < 2.3):
+            continue
+
+                # reject nose / nostril zone
+        if _inside_ellipse(
+            cx, cy,
+            ex=w_img * 0.28, ey=h_img * 0.58,
+            ax=w_img * 0.12, ay=h_img * 0.14
+        ):
+            continue
+
+        # reject eyelid
+        if (h_img * 0.35 < cy < h_img * 0.48) and (w_img * 0.2 < cx < w_img * 0.8):
+            continue
+
+        component_pixels = labels == i
+        component_redness = float(np.mean(redness[component_pixels]))
+
+        mask[component_pixels] = 255
+        kept_areas.append(area)
+        kept_redness.append(component_redness)
+
+    vis_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    vis_mask = cv2.dilate(mask, vis_kernel, iterations=1)
+
+    spots = max(cv2.connectedComponents(mask)[0] - 1, 0)
+    area_pixels = int(np.sum(mask > 0))
+    total_focus = max(int(np.sum(focus_mask > 0)), 1)
+    percent = 100.0 * area_pixels / total_focus
+
+    features = {
+        "spot_count": int(spots),
+        "red_area_percent": float(percent),
+        "avg_spot_size": float(np.mean(kept_areas)) if kept_areas else 0.0,
+        "mean_redness": float(np.mean(kept_redness)) if kept_redness else 0.0,
+        "texture_score": float(np.mean(lap[mask > 0])) if area_pixels > 0 else 0.0,
+    }
+
+    return AcneFeatureResult(
+        features=features,
+        red_mask=vis_mask,
+        redness_map=_normalize_to_uint8(redness),
+        dog_map=_normalize_to_uint8(dog),
+        lap_map=_normalize_to_uint8(lap),
+        candidate_mask=candidate,
+    )

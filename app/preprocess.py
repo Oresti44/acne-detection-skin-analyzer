@@ -9,55 +9,76 @@ import numpy as np
 @dataclass
 class PreprocessedFace:
     bgr: np.ndarray
+    display_bgr: np.ndarray
+    rgb: np.ndarray
     hsv: np.ndarray
     lab: np.ndarray
     gray: np.ndarray
-    analysis_mask: np.ndarray
+    focus_mask: np.ndarray
+    skin_mask: np.ndarray
 
 
-
-def central_face_mask(shape: tuple[int, int]) -> np.ndarray:
+def _build_focus_mask(shape: tuple[int, int]) -> np.ndarray:
     h, w = shape
     mask = np.zeros((h, w), dtype=np.uint8)
 
-    top = int(h * 0.12)
-    bottom = int(h * 0.92)
-    left = int(w * 0.12)
-    right = int(w * 0.88)
-    cv2.rectangle(mask, (left, top), (right, bottom), 255, -1)
+    # Slightly larger main face region
+    cv2.ellipse(
+        mask,
+        (w // 2, int(h * 0.58)),
+        (int(w * 0.28), int(h * 0.36)),
+        0,
+        0,
+        360,
+        255,
+        -1,
+    )
 
-    # Remove rough eye / lip / edge zones for v1.
-    eye_band_top = int(h * 0.18)
-    eye_band_bottom = int(h * 0.38)
-    cv2.rectangle(mask, (int(w * 0.16), eye_band_top), (int(w * 0.84), eye_band_bottom), 0, -1)
+    # Keep more forehead
+    mask[: int(h * 0.10), :] = 0
 
-    mouth_top = int(h * 0.72)
-    mouth_bottom = int(h * 0.92)
-    cv2.rectangle(mask, (int(w * 0.24), mouth_top), (int(w * 0.76), mouth_bottom), 0, -1)
+    # Keep more around mouth/chin acne zone
+    mask[int(h * 0.82):, :] = 0
 
     return mask
 
 
+def preprocess_face(face_bgr: np.ndarray, output_size: int = 420) -> PreprocessedFace:
+    img_bgr = cv2.resize(face_bgr, (output_size, output_size), interpolation=cv2.INTER_CUBIC)
 
-def preprocess_face(face_bgr: np.ndarray, output_size: int = 512) -> PreprocessedFace:
-    resized = cv2.resize(face_bgr, (output_size, output_size), interpolation=cv2.INTER_AREA)
+    lab0 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    l, a0, b0 = cv2.split(lab0)
 
-    lab = cv2.cvtColor(resized, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     l = clahe.apply(l)
-    normalized_bgr = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
 
-    denoised = cv2.GaussianBlur(normalized_bgr, (5, 5), 0)
-    hsv = cv2.cvtColor(denoised, cv2.COLOR_BGR2HSV)
-    lab_out = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
-    gray = cv2.cvtColor(denoised, cv2.COLOR_BGR2GRAY)
-    mask = central_face_mask(gray.shape)
+    enhanced_bgr = cv2.cvtColor(cv2.merge([l, a0, b0]), cv2.COLOR_LAB2BGR)
+
+    # keep display version sharp
+    display_bgr = enhanced_bgr.copy()
+
+    # light smoothing only for analysis
+    analysis_bgr = cv2.GaussianBlur(enhanced_bgr, (3, 3), 0.4)
+
+    rgb = cv2.cvtColor(display_bgr, cv2.COLOR_BGR2RGB)
+    hsv = cv2.cvtColor(analysis_bgr, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(analysis_bgr, cv2.COLOR_BGR2LAB)
+    gray = cv2.cvtColor(analysis_bgr, cv2.COLOR_BGR2GRAY)
+
+    h = hsv[:, :, 0]
+    s = hsv[:, :, 1]
+    v = hsv[:, :, 2]
+
+    skin_mask = (((h < 25) & (s > 20) & (v > 50)).astype(np.uint8) * 255)
+    focus_mask = _build_focus_mask(gray.shape)
 
     return PreprocessedFace(
-        bgr=denoised,
+        bgr=analysis_bgr,
+        display_bgr=display_bgr,
+        rgb=rgb,
         hsv=hsv,
-        lab=lab_out,
+        lab=lab,
         gray=gray,
-        analysis_mask=mask,
+        focus_mask=focus_mask,
+        skin_mask=skin_mask,
     )
