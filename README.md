@@ -148,7 +148,7 @@ Use images that are:
 
 ---
 
-## Tech Stack
+## Tech Used
 
 * Python
 * OpenCV
@@ -156,4 +156,3 @@ Use images that are:
 * Matplotlib
 * Streamlit
 * Jupyter Notebook
-
