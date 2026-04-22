@@ -102,15 +102,6 @@ def render_results(results, original_image_bgr):
     st.subheader("Extracted Features")
     st.json(fmt_features(acne_result.features))
 
-    st.subheader("Debug views")
-    d1, d2, d3 = st.columns(3)
-    with d1:
-        st.image(preprocessed.focus_mask, caption="Focus mask", width=220)
-    with d2:
-        st.image(acne_result.candidate_mask, caption="Candidate mask", width=220)
-    with d3:
-        st.image(acne_result.red_mask, caption="Filtered acne mask", width=220)
-
 
 def main():
     st.set_page_config(page_title="Acne Detector", layout="wide")
