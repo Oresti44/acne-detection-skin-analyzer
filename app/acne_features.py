@@ -82,7 +82,6 @@ def extract_features(face: PreprocessedFace) -> AcneFeatureResult:
         if not (4 < area < 85 and 0.4 < ar < 2.3):
             continue
 
-                # reject nose / nostril zone
         if _inside_ellipse(
             cx, cy,
             ex=w_img * 0.28, ey=h_img * 0.58,
@@ -90,7 +89,6 @@ def extract_features(face: PreprocessedFace) -> AcneFeatureResult:
         ):
             continue
 
-        # reject eyelid
         if (h_img * 0.35 < cy < h_img * 0.48) and (w_img * 0.2 < cx < w_img * 0.8):
             continue
 

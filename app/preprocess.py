@@ -22,7 +22,6 @@ def _build_focus_mask(shape: tuple[int, int]) -> np.ndarray:
     h, w = shape
     mask = np.zeros((h, w), dtype=np.uint8)
 
-    # Slightly larger main face region
     cv2.ellipse(
         mask,
         (w // 2, int(h * 0.58)),
@@ -34,10 +33,10 @@ def _build_focus_mask(shape: tuple[int, int]) -> np.ndarray:
         -1,
     )
 
-    # Keep more forehead
+    # Keep forehead
     mask[: int(h * 0.10), :] = 0
 
-    # Keep more around mouth/chin acne zone
+    # Keep mouth/chin
     mask[int(h * 0.82):, :] = 0
 
     return mask
@@ -54,10 +53,8 @@ def preprocess_face(face_bgr: np.ndarray, output_size: int = 420) -> Preprocesse
 
     enhanced_bgr = cv2.cvtColor(cv2.merge([l, a0, b0]), cv2.COLOR_LAB2BGR)
 
-    # keep display version sharp
     display_bgr = enhanced_bgr.copy()
 
-    # light smoothing only for analysis
     analysis_bgr = cv2.GaussianBlur(enhanced_bgr, (3, 3), 0.4)
 
     rgb = cv2.cvtColor(display_bgr, cv2.COLOR_BGR2RGB)

@@ -23,6 +23,7 @@ def _load_cascade(filename: str) -> cv2.CascadeClassifier:
     cascade_path = cv2.data.haarcascades + filename
     cascade = cv2.CascadeClassifier(cascade_path)
     if cascade.empty():
+        
         raise RuntimeError(f"Failed to load cascade: {filename}")
     return cascade
 
@@ -79,7 +80,6 @@ def detect_faces(image_bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
 
     all_boxes = []
 
-    # Frontal attempts: progressively more tolerant
     frontal_settings = [
         {"scaleFactor": 1.1, "minNeighbors": 5, "minSize": (60, 60)},
         {"scaleFactor": 1.05, "minNeighbors": 4, "minSize": (50, 50)},
@@ -92,7 +92,6 @@ def detect_faces(image_bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
         if all_boxes:
             break
 
-    # Profile attempt
     faces_profile = profile.detectMultiScale(
         gray,
         scaleFactor=1.1,
@@ -101,7 +100,6 @@ def detect_faces(image_bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
     )
     all_boxes.extend([tuple(map(int, face)) for face in faces_profile])
 
-    # Flipped profile attempt (detect other side)
     gray_flipped = cv2.flip(gray, 1)
     faces_profile_flipped = profile.detectMultiScale(
         gray_flipped,
